@@ -1,0 +1,295 @@
+---
+title: "01 - R statistical analysis"
+output: html_document
+---
+
+# data prep
+```{r}
+
+# load libraries
+library(jsonlite)
+library(tidyverse)
+
+# load data
+lmsys_A <- stream_in(file('../data/processed/classified_candidates_full_1m_belief_crossturn.jsonl'))
+lmsys_B <- stream_in(file('../data/processed/classified_candidates_full_1m_all_policy_sem1000.jsonl'))
+wild_A <-  stream_in(file('../data/processed/classified_wildchat_candidates_full_1m_belief_crossturn.jsonl'))
+wild_B <-  stream_in(file('../data/processed/classified_wildchat_candidates_full_1m_all_policy_sem1000.jsonl'))
+
+# combine and dedupe convos
+lmsys <- bind_rows(lmsys_A, lmsys_B) %>%
+  distinct(conversation_id, .keep_all = TRUE)
+wild <- bind_rows(wild_A, wild_B) %>%
+  distinct(conversation_id, .keep_all = TRUE)
+
+# color palette
+redBlue <- c('#407EC9', '#CE3333')
+cslPal <- c(
+  '#CE3333',  # red
+  '#593C8F',  # purple
+  '#407EC9',  # light blue
+  '#E8A03E',  # orange
+  '#083D77',  # dark blue
+  '#c2c4c4',  # grey
+  '#17C3B2'  # green
+  )
+
+# set font for figures
+windowsFonts(fra = windowsFont('Fira Sans'))
+
+# remove clutter
+rm(lmsys_A, lmsys_B, wild_A, wild_B)
+
+```
+
+# summarize funnels
+```{r}
+# function for summarizing funnels
+summfunnel <- function(x, lbl) {
+
+  # num of rows
+  n <- nrow(x)
+
+  # Hierarchical 3-stage filter (x -> s1 -> s2 -> s3)
+  s1 <- x %>%
+    filter(is_policy_or_political == TRUE)
+  s2 <- s1 %>%
+    filter(user_states_prior_belief == TRUE)
+  s3 <- s2 %>%
+    filter(seeking_type %in% c('confirming', 'neutral', 'falsifying'))
+
+  # output dataframe (check.names = FALSE keeps spaces/colons in column names)
+  output <- data.frame(
+    'Dataset' = as.character(lbl),
+    'Candidates Classified' = n,
+    'Stage 1: Policy Topic' = paste0(nrow(s1), ' (', round(100 * nrow(s1) / n, 1), '%)'),
+    'Stage 2: Prior Belief Stated' = paste0(nrow(s2), ' (', round(100 * nrow(s2) / nrow(s1), 1), '% of S1)'),
+    'Stage 3: Info-Seeking Query' = paste0(nrow(s3), ' (', round(100 * nrow(s3) / nrow(s2), 1), '% of S2)'),
+    check.names = FALSE
+  )
+
+  return(output)
+}
+
+# print summary across LMSYS, WildChat, and Combined 2M
+bind_rows(
+  summfunnel(lmsys, 'LMSYS-Chat-1M (1M Raw)'),
+  summfunnel(wild, 'WildChat-1M (1M Raw)'),
+  summfunnel(bind_rows(lmsys, wild), 'Combined 2M Corpus (2M Raw)')
+)
+
+# filter by policy, prior belief, and seeking type
+lmsys <- lmsys %>%
+  filter(is_policy_or_political == TRUE,
+         user_states_prior_belief == TRUE,
+         seeking_type %in% c('confirming', 'neutral', 'falsifying')) %>%
+  mutate(source = 'lmsys')
+
+wild <- wild %>%
+  filter(is_policy_or_political == TRUE,
+         user_states_prior_belief == TRUE,
+         seeking_type %in% c('confirming', 'neutral', 'falsifying')) %>%
+  mutate(source = 'wild')
+
+
+# combine Stage-3 data (N = 455)
+combined <- bind_rows(lmsys, wild)
+
+```
+
+
+# hypothesis tests across datasets
+```{r}
+
+# lmsys confirming vs. neutral vs. falsifying
+lmsys %>%
+  group_by(seeking_type) %>%
+  summarise(n = n(),
+            percent = round(n / nrow(.), 3)*100) 
+
+# falsify ratio
+paste0('LMSYS Falsify Ratio: ', round(221 / 31, 2), 'x')
+
+# lmsys confirming vs. neutral vs. falsifying
+wild %>%
+  group_by(seeking_type) %>%
+  summarise(n = n(),
+            percent = round(n / nrow(.), 3)*100) 
+
+
+paste0('WildChat Falsify Ratio: ', round(65 / 9, 2), 'x')
+
+
+# combined
+combined %>%
+  group_by(seeking_type) %>%
+  summarise(n = n(),
+            percent = round(n / nrow(.), 3)*100) 
+
+paste0('combined Falsify Ratio: ', round(286 / 40, 2), 'x')
+
+
+# binomial test (conf > fals)
+binom.test(286, 286 + 40, p = 0.5, alternative = c('two.sided'), conf.level = 0.95)
+
+# binomial test (conf > fals + neutral)
+binom.test(286, 286 + 40 + 129, p = 0.5, alternative = c('two.sided'), conf.level = 0.95)
+
+
+```
+
+# figures
+
+## percent by source
+```{r}
+
+# data
+tmp <- combined %>%
+  group_by(source, seeking_type) %>%
+  reframe(num = n()) %>%
+  mutate(total = sum(num), .by = source) %>%
+  mutate(percent = round(num / total, 3)*100)
+tmpc <- combined %>%
+  group_by(seeking_type) %>%
+  reframe(num = n()) %>%
+  mutate(total = sum(num)) %>%
+  mutate(percent = round(num / total, 4)*100) %>%
+    mutate(source = 'combined')
+tmp <- bind_rows(tmp, tmpc)
+
+tmp <- tmp %>%
+  mutate(seeking_type = case_when(
+    seeking_type == 'confirming' ~ 'Confirming',
+    seeking_type == 'falsifying' ~ 'Falsifying',
+    seeking_type == 'neutral' ~ 'Neutral',
+    TRUE ~ NA_character_
+  )) %>%
+  mutate(source = case_when(
+    source == 'lmsys' ~ 'LMSYS-Chat',
+    source == 'wild' ~ 'WildChat',
+    source == 'combined' ~ 'Combined',
+    TRUE ~ NA_character_
+  ))
+  
+
+# plot
+p <- ggplot(tmp, aes(x = source, y = percent, fill = fct_reorder(seeking_type, percent))) +
+       geom_bar(stat = 'identity', color = '#000', alpha = .8) +
+       geom_text(aes(label = paste0(percent, '%')),
+                 position = position_stack(vjust = 0.5),
+                 color = '#fff',
+                 size = 6) +
+       coord_flip() +
+       scale_y_continuous(limits = c(0, 100), expand = c(0,0)) +
+       scale_fill_manual(values = cslPal) +
+       labs(
+         title = 'Confirming Language was used more than\nNeutral or Falsifying Language',
+         x = NULL,
+         y = 'Percent of Sample',
+         fill = NULL,
+         caption = '\nCombined N = 455\nCalifornia Social Labs'
+       ) +
+       theme_minimal() +
+       guides(fill = guide_legend(reverse = TRUE)) +
+         # facet_grid(~ fct_rev(source)) +
+       theme(
+         text = element_text(family = 'fra', size = 20),
+         title = element_text(size = 18),
+         # plot.title = element_text(margin = margin(0, 0, 20, 0)),
+         plot.caption = element_text(hjust = 1, vjust = 0, size = 14, color = '#7e7e7e'),
+         axis.title.x = element_text(margin = margin(15, 0, 0, 0)),
+         axis.title.y = element_text(margin = margin(0, 15, 0, 0)),
+         axis.ticks.y = element_blank(),
+         axis.ticks.x = element_blank(),
+         strip.background = element_rect(fill = 'white'),
+         # legend.key = element_rect(size = 5, color = 'white'),
+         # legend.key.size = unit(2.5, 'lines'),
+         legend.position = 'bottom',
+         plot.margin = margin(t = 10, r = 40, b = 10, l = 10, unit = 'pt'),
+         panel.spacing = unit(1.5, 'lines'))
+
+# save to file
+png('../figures/p1.png', units = 'in', width = 10, height = 6, res = 500)
+plot(p)
+dev.off()
+
+```
+## percent by policy
+```{r}
+
+# data
+tmp <- combined %>%
+  group_by(seeking_type, topic_category) %>%
+  reframe(num = n()) %>%
+  mutate(total = sum(num), .by = topic_category) %>%
+  mutate(percent = round(num / total, 3)*100)
+
+tmp <- tmp %>%
+  mutate(seeking_type = case_when(
+    seeking_type == 'confirming' ~ 'Confirming',
+    seeking_type == 'falsifying' ~ 'Falsifying',
+    seeking_type == 'neutral' ~ 'Neutral',
+    TRUE ~ NA_character_
+  )) %>%
+  mutate(topic_category = case_when(
+    topic_category == 'economic_policy' ~ 'Economic Policy\n(n = 62)',
+    topic_category == 'social_policy' ~ 'Social Policy\n(n = 343)',
+    topic_category == 'politics' ~ 'Politics\n(n = 50)',
+    TRUE ~ NA_character_
+  ))
+
+# plot
+p <- ggplot(tmp, aes(x = topic_category, y = percent, fill = fct_reorder(seeking_type, percent))) +
+       geom_bar(stat = 'identity', color = '#000', alpha = .8) +
+       geom_text(aes(label = paste0(percent, '%')),
+                 position = position_stack(vjust = 0.5),
+                 color = '#fff',
+                 size = 6) +
+       coord_flip() +
+      scale_y_continuous(limits = c(0, 100), expand = c(0,0)) +
+       scale_fill_manual(values = cslPal) +
+
+    labs(
+      title = '\"Politics\" Category had greater share of\nFalsifying Language',
+      x = NULL,
+      y = 'Percent of Sample',
+      fill = NULL,
+      caption = '\nCombined N = 455\nCalifornia Social Labs'
+    ) +
+    theme_minimal() +
+  guides(fill = guide_legend(reverse = TRUE)) +
+       # facet_grid(~ fct_rev(source)) +
+    theme(
+        text = element_text(family = 'fra', size = 20),
+        title = element_text(size = 18),
+        # plot.title = element_text(margin = margin(0, 0, 20, 0)),
+        plot.caption = element_text(hjust = 1, vjust = 0, size = 14, color = '#7e7e7e'),
+        axis.title.x = element_text(margin = margin(15, 0, 0, 0)),
+        axis.title.y = element_text(margin = margin(0, 15, 0, 0)),
+        axis.ticks.y = element_blank(),
+        axis.ticks.x = element_blank(),
+        strip.background = element_rect(fill = 'white'),
+        # legend.key = element_rect(size = 5, color = 'white'),
+        # legend.key.size = unit(2.5, 'lines'),
+        legend.position = 'bottom',
+        plot.margin = margin(t = 10, r = 40, b = 10, l = 10, unit = 'pt'),
+        panel.spacing = unit(1.5, 'lines'))
+
+# save to file
+png('../figures/p2.png', units = 'in', width = 10, height = 6, res = 500)
+plot(p)
+dev.off()
+
+
+```
+
+
+
+
+
+
+
+
+
+
+

@@ -1,0 +1,31 @@
+# Virtual environments & secrets
+venv/
+.venv/
+.env
+
+# Exclude all dataset files (Parquet, JSONL, CSVs with conversation text)
+# Keeps empty data/raw/ and data/processed/ folder structure via .gitkeep
+data/raw/*
+!data/raw/.gitkeep
+data/processed/*
+!data/processed/.gitkeep
+
+# Optional: Uncomment the 3 lines below if you DO want to push the summary plots & text reports
+# !data/processed/*.png
+# !data/processed/*.pdf
+# !data/processed/statistical_report*.txt
+
+# Python cache & Jupyter checkpoints
+__pycache__/
+*.py[cod]
+.ipynb_checkpoints/
+
+# R / RStudio temporary files
+.Rhistory
+.RData
+.Ruserdata
+.Rproj.user/
+
+# OS metadata
+.DS_Store
+Thumbs.db
